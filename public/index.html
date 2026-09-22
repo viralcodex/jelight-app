@@ -422,35 +422,65 @@
       // Punctuation is skipped (it's noise); every other token becomes a chip
       // pairing the token text with its category label, so you can read Jev's
       // decisions per line instead of re-reading the same colored code.
+      let lastInspectorHtml = "";
       function renderInspector() {
         const lines = cm.getValue().split("\n");
         let html = "";
-        lines.forEach((line, i) => {
-          const tokens = tokensFor(line);
-          if (!line.trim() || !tokens || tokens.length === 0) return;
-          const classified = tokens.filter((t) => t.category !== "punctuation");
-          if (classified.length === 0) return;
+        let anyContent = false;
 
-          let chips = "";
-          for (const t of classified) {
-            const conf = typeof t.confidence === "number" ? t.confidence : 1;
-            const pct = Math.round(conf * 100);
-            const low = conf < 0.85 ? " low" : "";
-            chips +=
-              `<span class="chip${low}" title="${pct}% confidence">` +
-              `<span class="chip-text ${t.category}">${escapeHtml(t.text)}</span>` +
-              `<span class="chip-cat">${t.category}</span></span>`;
+        lines.forEach((line, i) => {
+          let block = null;
+          const tokens = tokensFor(line);
+          if (line.trim() && tokens && tokens.length) {
+            const classified = tokens.filter((t) => t.category !== "punctuation");
+            if (classified.length) {
+              let chips = "";
+              for (const t of classified) {
+                const conf = typeof t.confidence === "number" ? t.confidence : 1;
+                const pct = Math.round(conf * 100);
+                const low = conf < 0.85 ? " low" : "";
+                chips +=
+                  `<span class="chip${low}" title="${pct}% confidence">` +
+                  `<span class="chip-text ${t.category}">${escapeHtml(t.text)}</span>` +
+                  `<span class="chip-cat">${t.category}</span></span>`;
+              }
+              block =
+                `<div class="line-block">` +
+                `<div class="line-head">` +
+                `<span class="ln">${i + 1}</span>` +
+                `<span class="src">${escapeHtml(line.trim())}</span></div>` +
+                `<div class="chips">${chips}</div></div>`;
+              inspectorLineCache.set(i, block);
+            }
           }
 
-          html +=
-            `<div class="line-block">` +
-            `<div class="line-head">` +
-            `<span class="ln">${i + 1}</span>` +
-            `<span class="src">${escapeHtml(line.trim())}</span></div>` +
-            `<div class="chips">${chips}</div></div>`;
+          if (block === null) {
+            if (line.trim()) {
+              block = inspectorLineCache.get(i) ?? null;
+            } else {
+              inspectorLineCache.delete(i);
+            }
+          }
+
+          if (block) {
+            html += block;
+            anyContent = true;
+          }
         });
-        inspectorEl.innerHTML =
-          html || `<div class="empty">Type code on the left to see Jev's token classifications.</div>`;
+
+        // Drop cached blocks for lines that no longer exist.
+        for (const i of [...inspectorLineCache.keys()]) {
+          if (i >= lines.length) inspectorLineCache.delete(i);
+        }
+
+        const next =
+          anyContent
+            ? html
+            : `<div class="empty">Type code on the left to see Jev's token classifications.</div>`;
+        if (next !== lastInspectorHtml) {
+          inspectorEl.innerHTML = next;
+          lastInspectorHtml = next;
+        }
       }
 
       function repaint() {
@@ -475,13 +505,15 @@
         });
 
         if (pending.length === 0) {
+          // Another (possibly stale) in-flight call may have just filled the
+          // cache without repainting, so paint from whatever is cached now.
+          repaint();
           statusEl.textContent = code.trim() ? "cached" : "ready";
           return;
         }
 
         const mySeq = ++seq;
         statusEl.textContent = `highlighting ${pending.length} line(s)…`;
-        const startedAt = performance.now();
 
         try {
           const res = await fetch("/highlight-lines", {
@@ -504,10 +536,10 @@
             if (key) semanticCache.set(key, result.tokens);
           }
 
+          repaint();
+
           if (mySeq === seq) {
-            repaint();
-            const elapsed = (performance.now() - startedAt) / 1000;
-            statusEl.textContent = `done in ${elapsed.toFixed(2)}s`;
+            statusEl.textContent = "done";
           }
         } catch (err) {
           if (mySeq === seq) statusEl.textContent = "error: " + err.message;
@@ -523,13 +555,14 @@
         clearTimeout(baseTimer);
         baseTimer = setTimeout(refreshBase, 80);
         clearTimeout(semTimer);
-        semTimer = setTimeout(refreshLines, 500);
+        semTimer = setTimeout(refreshLines, 300);
       });
 
       // Switching language invalidates every cached line.
       langEl.addEventListener("change", () => {
         baseCache.clear();
         semanticCache.clear();
+        inspectorLineCache.clear();
         clearAllMarks();
         repaint();
         refreshBase();
@@ -540,6 +573,7 @@
       // cache and just drop cached semantic results, then re-request them.
       fullModeEl.addEventListener("change", () => {
         semanticCache.clear();
+        inspectorLineCache.clear();
         clearAllMarks();
         repaint();
         refreshLines();
