@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>jelight — Jev semantic highlighter</title>
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css"
+    />
+    <style>
+      :root {
+        --bg: #ffffff;
+        --panel: #f6f8fa;
+        --border: #d0d7de;
+        --fg: #1f2328;
+        --muted: #57606a;
+        --gutter-fg: #8c959f;
+        --accent: #0969da;
+
+        --keyword: #cf222e;
+        --type: #953800;
+        --function: #8250df;
+        --variable: #1f2328;
+        --string: #0a3069;
+        --number: #0550ae;
+        --comment: #6e7781;
+        --operator: #0550ae;
+        --punctuation: #57606a;
+        --other: #1f2328;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; }
+      body {
+        background: var(--bg);
+        color: var(--fg);
+        font-family: ui-sans-serif, system-ui, sans-serif;
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 10px 16px;
+        border-bottom: 1px solid var(--border);
+        background: var(--panel);
+        flex: 0 0 auto;
+      }
+      header h1 { font-size: 15px; margin: 0; font-weight: 600; letter-spacing: 0.02em; }
+      header .spacer { flex: 1; }
+      select {
+        background: var(--bg);
+        color: var(--fg);
+        border: 1px solid var(--border);
+        border-radius: 0;
+        padding: 6px 10px;
+        font-size: 13px;
+      }
+      #status { font-size: 12px; color: var(--muted); min-width: 120px; text-align: right; }
+      .mode-toggle {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 13px;
+        color: var(--muted);
+        cursor: pointer;
+        user-select: none;
+      }
+      .mode-toggle input { accent-color: var(--fg); cursor: pointer; }
+
+      /* Two-column layout: editor | inspector */
+      main {
+        flex: 1 1 auto;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        min-height: 0;
+      }
+      .col {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        min-height: 0;
+        overflow: hidden;
+      }
+      .col + .col { border-left: 1px solid var(--border); }
+      .col-title {
+        flex: 0 0 auto;
+        padding: 8px 14px;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted);
+        background: var(--panel);
+        border-bottom: 1px solid var(--border);
+      }
+
+      /* Editor holds the CodeMirror instance. It's a positioning context so
+         CodeMirror can fill it via inset:0 — a percentage height won't resolve
+         against the flex-derived (auto) height, but absolute inset does. */
+      .editor { position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden; }
+      .CodeMirror {
+        position: absolute;
+        inset: 0;
+        height: auto;
+        font-family: "SF Mono", ui-monospace, "Cascadia Code", Menlo, monospace;
+        font-size: 15px;
+        line-height: 1.6;
+        background: var(--bg);
+        color: var(--fg);
+      }
+      .CodeMirror-gutters {
+        background: var(--panel);
+        border-right: 1px solid var(--border);
+      }
+      .CodeMirror-linenumber { color: var(--gutter-fg); }
+
+      /* Matched-bracket highlight (matchbrackets addon) tuned for light theme */
+      .CodeMirror-matchingbracket {
+        color: var(--accent) !important;
+        background: rgba(9, 105, 218, 0.12);
+        font-weight: 600;
+      }
+      .CodeMirror-nonmatchingbracket {
+        color: var(--keyword) !important;
+      }
+
+      /* Category colors — used by Jev marks in the editor and inspector text */
+      .keyword { color: var(--keyword); font-weight: 600; }
+      .type { color: var(--type); }
+      .function { color: var(--function); }
+      .variable { color: var(--variable); }
+      .string { color: var(--string); }
+      .number { color: var(--number); }
+      .comment { color: var(--comment); font-style: italic; }
+      .operator { color: var(--operator); }
+      .punctuation { color: var(--punctuation); }
+      .other { color: var(--other); }
+
+      /* Inspector: structured Jev response */
+      .inspector {
+        flex: 1 1 auto;
+        overflow: auto;
+        padding: 8px 0;
+      }
+      .empty {
+        padding: 20px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      /* Inspector: per code line, chips showing Jev's per-token classification. */
+      .line-block { border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+      .line-head {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        padding: 8px 14px 6px;
+        font-size: 13px;
+      }
+      .line-head .ln {
+        flex: 0 0 auto;
+        min-width: 20px;
+        text-align: right;
+        font-weight: 600;
+        color: var(--gutter-fg);
+        font-family: ui-monospace, monospace;
+        user-select: none;
+      }
+      .line-head .src {
+        font-family: "SF Mono", ui-monospace, Menlo, monospace;
+        color: var(--fg);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        padding: 0 14px 0 44px;
+      }
+      .chip {
+        display: inline-flex;
+        align-items: stretch;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        overflow: hidden;
+        font-size: 12px;
+        background: var(--bg);
+      }
+      .chip-text {
+        padding: 3px 7px;
+        font-family: ui-monospace, monospace;
+        white-space: pre;
+        background: #fafbfc;
+      }
+      .chip-cat {
+        padding: 3px 7px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--muted);
+        border-left: 1px solid var(--border);
+        align-self: center;
+      }
+      .chip.low { border-color: rgba(207, 34, 46, 0.5); }
+      .chip.low .chip-cat { color: var(--keyword); }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>jelight</h1>
+      <select id="lang">
+        <option value="javascript">JavaScript</option>
+        <option value="typescript">TypeScript</option>
+        <option value="python">Python</option>
+        <option value="rust">Rust</option>
+        <option value="go">Go</option>
+        <option value="java">Java</option>
+        <option value="c">C</option>
+        <option value="cpp">C++</option>
+        <option value="sql">SQL</option>
+        <option value="html">HTML</option>
+        <option value="css">CSS</option>
+      </select>
+      <label class="mode-toggle" title="Classify every token with Jev instead of only ambiguous identifiers">
+        <input type="checkbox" id="fullMode" />
+        Only Jev Mode
+      </label>
+      <span class="spacer"></span>
+      <span id="status">ready</span>
+    </header>
+
+    <main>
+      <section class="col">
+        <div class="col-title">Editor</div>
+        <div class="editor">
+          <div id="editor"></div>
+        </div>
+      </section>
+
+      <section class="col">
+        <div class="col-title">Jev classification</div>
+        <div id="inspector" class="inspector">
+          <div class="empty">Type code on the left to see Jev's token classifications.</div>
+        </div>
+      </section>
+    </main>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/closebrackets.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/matchbrackets.min.js"></script>
+    <script>
+      const inspectorEl = document.getElementById("inspector");
+      const langEl = document.getElementById("lang");
+      const statusEl = document.getElementById("status");
+      const fullModeEl = document.getElementById("fullMode");
+      const currentMode = () => (fullModeEl.checked ? "full" : "assist");
+
+      const escapeHtml = (s) =>
+        s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+      // CodeMirror gives us line numbers and tab handling for free. We disable
+      // its own syntax mode (mode: null) and paint Jev's categories on top with
+      // markText, so semantic coloring is the only coloring. Because mode:null
+      // provides no indentation logic, we add bracket auto-closing via the
+      // closebrackets addon and a custom smart-Enter handler below.
+      const INDENT = "  "; // two spaces per level
+      const cm = CodeMirror(document.getElementById("editor"), {
+        mode: null,
+        lineNumbers: true,
+        smartIndent: true,
+        indentUnit: 2,
+        tabSize: 2,
+        indentWithTabs: false,
+        lineWrapping: true,
+        autoCloseBrackets: true, // type ( [ { " ' ` and the closer is inserted
+        matchBrackets: true,
+        placeholder: "Start typing code…",
+      });
+
+      // Auto-indent on Enter: keep the current line's indentation, add one level
+      // after an opening bracket, and expand `{|}` into a block. Registered at
+      // the FRONT of the keymap stack (addKeyMap ... false) so it beats the
+      // closebrackets addon's own Enter handler for freshly auto-closed pairs.
+      cm.addKeyMap(
+        {
+          Enter: (editor) => {
+            const cur = editor.getCursor();
+            const line = editor.getLine(cur.line);
+            const before = line.slice(0, cur.ch);
+            const after = line.slice(cur.ch);
+            const indent = (before.match(/^\s*/) || [""])[0];
+            const opensBlock = /[([{]\s*$/.test(before);
+            const closesNext = /^\s*[)\]}]/.test(after);
+
+            if (opensBlock && closesNext) {
+              // Cursor sits between a bracket pair: put the closer on its own
+              // line and drop the caret onto an indented middle line.
+              editor.replaceSelection("\n" + indent + INDENT + "\n" + indent);
+              editor.setCursor({ line: cur.line + 1, ch: indent.length + INDENT.length });
+            } else if (opensBlock) {
+              editor.replaceSelection("\n" + indent + INDENT);
+            } else {
+              editor.replaceSelection("\n" + indent);
+            }
+          },
+        },
+        false,
+      );
+
+      // Base tokens come from the server's synchronous /highlight-base route,
+      // and semantic tokens from /highlight-lines. Both live in the jelight
+      // library — the browser keeps no classifier of its own, it only renders.
+      const baseCache = new Map();
+      const semanticCache = new Map();
+      const keyFor = (line) => langEl.value + "\n" + line;
+      const tokensFor = (line) =>
+        semanticCache.get(keyFor(line)) ?? baseCache.get(keyFor(line));
+
+      // Fetch lexical/provisional tokens for every uncached, non-empty line in
+      // ONE request (no model calls server-side), then repaint.
+      let baseSeq = 0;
+      async function refreshBase() {
+        const code = cm.getValue();
+        const lines = code.split("\n");
+        const pending = [];
+        const seen = new Set();
+
+        lines.forEach((line, i) => {
+          const key = keyFor(line);
+          if (!line.trim() || baseCache.has(key) || seen.has(key)) return;
+          seen.add(key);
+          pending.push({ line, lineNumber: i, key });
+        });
+
+        if (pending.length === 0) return;
+
+        const mySeq = ++baseSeq;
+        try {
+          const res = await fetch("/highlight-base", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              code,
+              lang: langEl.value,
+              lines: pending.map(({ line, lineNumber }) => ({ line, lineNumber })),
+            }),
+          });
+          const data = await res.json();
+          if (data.error) throw new Error(data.error);
+
+          const byNumber = new Map(pending.map((p) => [p.lineNumber, p.key]));
+          for (const result of data.results) {
+            const key = byNumber.get(result.lineNumber);
+            if (key) baseCache.set(key, result.tokens);
+          }
+          if (mySeq === baseSeq) repaint();
+        } catch (err) {
+          if (mySeq === baseSeq) statusEl.textContent = "error: " + err.message;
+        }
+      }
+
+      // Map a token to a render opacity. Provisional base guesses render at full
+      // opacity so they don't visibly brighten when Jev confirms them — only
+      // genuine low-confidence *semantic* results are dimmed. Full above 0.85,
+      // fading to 0.4.
+      function opacityFor(token) {
+        if (token.provisional) return 1;
+        const conf = token.confidence;
+        if (typeof conf !== "number") return 1;
+        if (conf >= 0.85) return 1;
+        return Math.max(0.4, conf).toFixed(2);
+      }
+
+      // Editor coloring via CodeMirror's markText. Marks are tracked PER LINE so
+      // a repaint only re-marks lines that have fresh tokens. A line whose new
+      // text isn't classified yet keeps its existing marks (CodeMirror shifts
+      // them as you type), so tokens never flash back to uncolored mid-keystroke.
+      const lineMarks = new Map(); // lineIndex -> mark[]
+      function clearLineMarks(i) {
+        const ms = lineMarks.get(i);
+        if (ms) {
+          ms.forEach((m) => m.clear());
+          lineMarks.delete(i);
+        }
+      }
+      function clearAllMarks() {
+        for (const i of [...lineMarks.keys()]) clearLineMarks(i);
+      }
+      function applyMarks() {
+        const lines = cm.getValue().split("\n");
+        lines.forEach((line, i) => {
+          const tokens = tokensFor(line);
+          if (!tokens) return; // leave stale marks in place until fresh ones arrive
+          clearLineMarks(i);
+          const ms = [];
+          for (const t of tokens) {
+            const dim = opacityFor(t);
+            ms.push(
+              cm.markText(
+                { line: i, ch: t.start },
+                { line: i, ch: t.end },
+                {
+                  className: t.category,
+                  css: dim === 1 ? undefined : `opacity:${dim}`,
+                }
+              )
+            );
+          }
+          lineMarks.set(i, ms);
+        });
+        // Drop marks for lines that no longer exist (e.g. after deleting lines).
+        for (const i of [...lineMarks.keys()]) {
+          if (i >= lines.length) clearLineMarks(i);
+        }
+      }
+
+      // Right column: per code line, show what Jev classified each token as.
+      // Punctuation is skipped (it's noise); every other token becomes a chip
+      // pairing the token text with its category label, so you can read Jev's
+      // decisions per line instead of re-reading the same colored code.
+      function renderInspector() {
+        const lines = cm.getValue().split("\n");
+        let html = "";
+        lines.forEach((line, i) => {
+          const tokens = tokensFor(line);
+          if (!line.trim() || !tokens || tokens.length === 0) return;
+          const classified = tokens.filter((t) => t.category !== "punctuation");
+          if (classified.length === 0) return;
+
+          let chips = "";
+          for (const t of classified) {
+            const conf = typeof t.confidence === "number" ? t.confidence : 1;
+            const pct = Math.round(conf * 100);
+            const low = conf < 0.85 ? " low" : "";
+            chips +=
+              `<span class="chip${low}" title="${pct}% confidence">` +
+              `<span class="chip-text ${t.category}">${escapeHtml(t.text)}</span>` +
+              `<span class="chip-cat">${t.category}</span></span>`;
+          }
+
+          html +=
+            `<div class="line-block">` +
+            `<div class="line-head">` +
+            `<span class="ln">${i + 1}</span>` +
+            `<span class="src">${escapeHtml(line.trim())}</span></div>` +
+            `<div class="chips">${chips}</div></div>`;
+        });
+        inspectorEl.innerHTML =
+          html || `<div class="empty">Type code on the left to see Jev's token classifications.</div>`;
+      }
+
+      function repaint() {
+        applyMarks();
+        renderInspector();
+      }
+
+      let seq = 0;
+      // Fetch classifications for every uncached, non-empty line in ONE batched
+      // request. A pasted chunk is highlighted as a whole, not line-by-line.
+      async function refreshLines() {
+        const code = cm.getValue();
+        const lines = code.split("\n");
+        const pending = [];
+        const seen = new Set();
+
+        lines.forEach((line, i) => {
+          const key = keyFor(line);
+          if (!line.trim() || semanticCache.has(key) || seen.has(key)) return;
+          seen.add(key);
+          pending.push({ line, lineNumber: i, key });
+        });
+
+        if (pending.length === 0) {
+          statusEl.textContent = code.trim() ? "cached" : "ready";
+          return;
+        }
+
+        const mySeq = ++seq;
+        statusEl.textContent = `highlighting ${pending.length} line(s)…`;
+        const startedAt = performance.now();
+
+        try {
+          const res = await fetch("/highlight-lines", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              code,
+              lang: langEl.value,
+              mode: currentMode(),
+              lines: pending.map(({ line, lineNumber }) => ({ line, lineNumber })),
+            }),
+          });
+          const data = await res.json();
+          if (data.error) throw new Error(data.error);
+
+          // Map each returned line result back to its cache key by line number.
+          const byNumber = new Map(pending.map((p) => [p.lineNumber, p.key]));
+          for (const result of data.results) {
+            const key = byNumber.get(result.lineNumber);
+            if (key) semanticCache.set(key, result.tokens);
+          }
+
+          if (mySeq === seq) {
+            repaint();
+            const elapsed = (performance.now() - startedAt) / 1000;
+            statusEl.textContent = `done in ${elapsed.toFixed(2)}s`;
+          }
+        } catch (err) {
+          if (mySeq === seq) statusEl.textContent = "error: " + err.message;
+        }
+      }
+
+      let baseTimer = null;
+      let semTimer = null;
+      cm.on("change", () => {
+        // Repaint immediately from whatever is cached, then refresh base (fast,
+        // no model) and semantic (Jev) on short/long debounces respectively.
+        repaint();
+        clearTimeout(baseTimer);
+        baseTimer = setTimeout(refreshBase, 80);
+        clearTimeout(semTimer);
+        semTimer = setTimeout(refreshLines, 500);
+      });
+
+      // Switching language invalidates every cached line.
+      langEl.addEventListener("change", () => {
+        baseCache.clear();
+        semanticCache.clear();
+        clearAllMarks();
+        repaint();
+        refreshBase();
+        refreshLines();
+      });
+
+      // Switching Jev mode only changes the semantic pass, so keep the base
+      // cache and just drop cached semantic results, then re-request them.
+      fullModeEl.addEventListener("change", () => {
+        semanticCache.clear();
+        clearAllMarks();
+        repaint();
+        refreshLines();
+      });
+
+      refreshBase();
+      repaint();
+    </script>
+  </body>
+</html>

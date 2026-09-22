@@ -1,0 +1,37 @@
+{
+  "name": "jelight-app",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "Demo server + thin-client editor for the jelight semantic highlighter.",
+  "license": "MIT",
+  "homepage": "https://github.com/viralcodex/jelight-app#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/viralcodex/jelight-app.git"
+  },
+  "bugs": {
+    "url": "https://github.com/viralcodex/jelight-app/issues"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "ai": "^7.0.107",
+    "dotenv": "^16.4.5",
+    "express": "^5.2.1",
+    "jelight": "github:viralcodex/jelight"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.20.4",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
